@@ -1,0 +1,36 @@
+# Build artifacts
+*.exe
+*.dll
+*.obj
+*.o
+*.a
+*.res
+
+# Build directories
+UxPlay/build/
+winroot/
+mingw64.db.d/
+mingw64.db.tar.zst/
+pkgs/
+
+# Distribution (keep README but ignore large zip)
+UxPlay-Multi-win64.zip
+
+# Diagnostic tools
+diag/
+fetch.log
+fetch_msys2.py
+checkimports.sh
+closure.sh
+log *.rar
+toolchain.cmake
+
+# IDE / OS
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Config file (binary/encoded)
+配置文件.int
