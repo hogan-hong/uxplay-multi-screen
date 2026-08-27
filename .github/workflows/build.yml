@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+env:
+  BUILD_TYPE: RelWithDebInfo
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install MSYS2 (UCRT64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-libplist
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-pkg-config
+            base-devel
+
+      - name: Configure UxPlay (icon.o + cmake)
+        env:
+          PKG_CONFIG_PATH: /ucrt64/lib/pkgconfig
+        run: |
+          cd UxPlay
+          mkdir -p build
+          windres icon.rc -O coff -o build/icon.o
+          cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DNO_X11_DEPS=ON
+
+      - name: Build UxPlay
+        env:
+          PKG_CONFIG_PATH: /ucrt64/lib/pkgconfig
+        run: cmake --build UxPlay/build --parallel
+
+      - name: Verify uxplay.exe
+        run: |
+          test -f UxPlay/build/uxplay.exe
+          ls -la UxPlay/build/uxplay.exe
+
+      - name: Build router + panel
+        run: |
+          cd router
+          windres icon.rc -O coff -o icon.res
+          gcc -O2 -Wall -o uxplay-router.exe uxplay-router.c \
+            -I../UxPlay/lib -I../UxPlay/lib/mdnsd \
+            -lws2_32 -liphlpapi -lole32 -lshell32 -lcomctl32 -lcomdlg32 icon.res \
+            -L../UxPlay/build/lib/mdnsd -ldnssd
+          gcc -O2 -Wall -o uxplay-panel.exe panel.c -luser32 -lgdi32 icon.res
+          ls -la uxplay-router.exe uxplay-panel.exe
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: uxplay-windows
+          path: |
+            UxPlay/build/uxplay.exe
+            router/uxplay-router.exe
+            router/uxplay-panel.exe
