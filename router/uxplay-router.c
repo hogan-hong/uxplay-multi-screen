@@ -405,7 +405,7 @@ static LRESULT CALLBACK pick_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         ScreenToClient(h, &pt);
         GetClientRect(h, &cl);
         if (pick_hit(pt.x, pt.y, cl.right) >= 0) {
-            SetCursor(LoadCursorW(NULL, IDC_HAND));
+            SetCursor(LoadCursorW(NULL, MAKEINTRESOURCEW(IDC_HAND)));
             return TRUE;
         }
         return DefWindowProcW(h, m, wp, lp);
@@ -506,9 +506,9 @@ static int pick_group_dialog(void) {
     WNDCLASSW wc; memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = pick_proc;
     wc.hInstance = GetModuleHandleW(NULL);
-    wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+    wc.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(IDC_ARROW));
     wc.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1));
-    if (!wc.hIcon) wc.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+    if (!wc.hIcon) wc.hIcon = LoadIconW(NULL, MAKEINTRESOURCEW(IDI_APPLICATION));
     wc.lpszClassName = L"UxPickGroup";
     RegisterClassW(&wc);
     g_pick_n = g_cfg_ngroups > 6 ? 6 : g_cfg_ngroups;
@@ -840,7 +840,7 @@ static HWND tray_init(void) {
         GetModuleFileNameW(NULL, exe, MAX_PATH);
         g_nid.hIcon = ExtractAssociatedIconW(GetModuleHandleW(NULL), exe, &(WORD){0});
     }
-    if (!g_nid.hIcon) g_nid.hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
+    if (!g_nid.hIcon) g_nid.hIcon = LoadIconW(NULL, MAKEINTRESOURCEW(IDI_APPLICATION));
     EnterCriticalSection(&g_lock);
     wcscpy(g_nid.szTip, g_tray_tip);
     LeaveCriticalSection(&g_lock);
