@@ -32,6 +32,10 @@ jobs:
             mingw-w64-ucrt-x86_64-gstreamer
             mingw-w64-ucrt-x86_64-gst-plugins-base
             mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-gst-plugins-bad
+            mingw-w64-ucrt-x86_64-gst-plugins-ugly
+            mingw-w64-ucrt-x86_64-gst-libav
+            mingw-w64-ucrt-x86_64-gstreamer-tools
             mingw-w64-ucrt-x86_64-pkg-config
             base-devel
 
@@ -65,11 +69,71 @@ jobs:
           gcc -O2 -Wall -o uxplay-panel.exe panel.c -luser32 -lgdi32 icon.res
           ls -la uxplay-router.exe uxplay-panel.exe
 
+      - name: Collect runtime (green package)
+        run: |
+          set -e
+          # 绿色版打包：exe + GStreamer 插件 + 递归收集全部依赖 DLL
+          mkdir -p dist/gstreamer-1.0
+          cp UxPlay/build/uxplay.exe router/uxplay-router.exe router/uxplay-panel.exe dist/
+          # GStreamer 插件（含 libav / bad / good / base / ugly）
+          cp /ucrt64/lib/gstreamer-1.0/*.dll dist/gstreamer-1.0/ 2>/dev/null || true
+          # 插件扫描器
+          cp /ucrt64/libexec/gstreamer-1.0/gst-plugin-scanner.exe dist/gstreamer-1.0/ 2>/dev/null || true
+          SRC=/ucrt64/bin
+          # 递归收集 DLL 依赖（最多 8 轮直到稳定）
+          for round in 1 2 3 4 5 6 7 8; do
+            added=0
+            for t in $(find dist -name '*.exe' -o -name '*.dll'); do
+              for d in $(objdump -p "$t" 2>/dev/null | grep 'DLL Name' | awk '{print $3}'); do
+                if [ -f "$SRC/$d" ] && [ ! -f "dist/$d" ]; then
+                  cp "$SRC/$d" "dist/$d"
+                  added=1
+                fi
+              done
+            done
+            [ "$added" = "0" ] && break
+          done
+          # 校验：列出仍缺失的非系统 DLL
+          MISSING=0
+          for t in $(find dist -name '*.exe' -o -name '*.dll'); do
+            for d in $(objdump -p "$t" 2>/dev/null | grep 'DLL Name' | awk '{print $3}'); do
+              if [ ! -f "dist/$d" ]; then
+                D=$(echo "$d" | tr 'A-Z' 'a-z')
+                case "$D" in
+                  kernel32.dll|user32.dll|gdi32.dll|advapi32.dll|shell32.dll|ole32.dll|oleaut32.dll|ws2_32.dll|msvcrt.dll|ucrtbase.dll|ntdll.dll|comdlg32.dll|comctl32.dll|shlwapi.dll|winmm.dll|imm32.dll|setupapi.dll|powrprof.dll|crypt32.dll|bcrypt.dll|secur32.dll|netapi32.dll|iphlpapi.dll|wininet.dll|dbghelp.dll|version.dll|winspool.drv|mpr.dll|userenv.dll|uxtheme.dll|shcore.dll|wintrust.dll|imagehlp.dll|winhttp.dll|dwmapi.dll|wtsapi32.dll|opengl32.dll|glu32.dll|dnsapi.dll|rpcrt4.dll|psapi.dll|wbemprox.dll|wldap32.dll|msimg32.dll|hid.dll|cfgmgr32.dll|winusb.dll|samcli.dll|authz.dll|devobj.dll|ntmarta.dll|srvcli.dll|cabinet.dll|usp10.dll|dwrite.dll|d3d9.dll|d3d11.dll|d3d12.dll|dxgi.dll)
+                    ;;
+                  *)
+                    echo "MISSING DLL: $d (from $t)"
+                    MISSING=1
+                    ;;
+                esac
+              fi
+            done
+          done
+          if [ "$MISSING" = "1" ]; then
+            echo "::warning:: 存在缺失 DLL（见上），请检查"
+          else
+            echo "所有依赖 DLL 已收集完整"
+          fi
+          # 验证 GStreamer 插件可加载
+          GST_PLUGIN_PATH="$PWD/dist/gstreamer-1.0" gst-inspect-1.0 d3d11videosink >/dev/null 2>&1 && echo "d3d11videosink OK" || echo "d3d11videosink 缺失(警告)"
+          GST_PLUGIN_PATH="$PWD/dist/gstreamer-1.0" gst-inspect-1.0 avdec_h264 >/dev/null 2>&1 && echo "avdec_h264 OK" || echo "avdec_h264 缺失(警告)"
+          GST_PLUGIN_PATH="$PWD/dist/gstreamer-1.0" gst-inspect-1.0 h264parse >/dev/null 2>&1 && echo "h264parse OK" || echo "h264parse 缺失(警告)"
+          GST_PLUGIN_PATH="$PWD/dist/gstreamer-1.0" gst-inspect-1.0 wasapisink >/dev/null 2>&1 && echo "wasapisink OK" || echo "wasapisink 缺失(警告)"
+          # 启动脚本（bat 用 CRLF）
+          printf '@echo off\r\nrem 绿色版启动器: 设置 GStreamer 插件路径后启动路由器\r\nset "GST_PLUGIN_PATH=%%~dp0gstreamer-1.0"\r\nset "GST_PLUGIN_SCANNER=%%~dp0gstreamer-1.0\\gst-plugin-scanner.exe"\r\ncd /d %%~dp0\r\nuxplay-router.exe %%*\r\n' > dist/start.bat
+          ls -la dist/ | head -60
+          echo "--- DLL 总数: $(ls dist/*.dll | wc -l)  插件数: $(ls dist/gstreamer-1.0/*.dll | wc -l)"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: uxplay-windows
           path: |
-            UxPlay/build/uxplay.exe
-            router/uxplay-router.exe
-            router/uxplay-panel.exe
+            dist/uxplay.exe
+            dist/uxplay-router.exe
+            dist/uxplay-panel.exe
+            dist/*.dll
+            dist/gstreamer-1.0/*.dll
+            dist/gstreamer-1.0/gst-plugin-scanner.exe
+            dist/start.bat

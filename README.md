@@ -281,13 +281,18 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 
 ## 发布产物
 
-`UxPlay-Multi-win64.zip` 包含：
+`UxPlay-Multi-win64.zip` 包含（CI 自动打包的绿色版，解压即可运行）：
 
 - `uxplay-router.exe` — 路由器
 - `uxplay.exe` — 后端 (最多5个实例)
 - `uxplay-panel.exe` — 面板窗口
-- `groups.ini` — 配置文件
-- `*.dll` — GStreamer + FFmpeg + 系统依赖
+- `start.bat` — 绿色版启动器（自动设置 GStreamer 插件路径后启动路由器）
+- `gstreamer-1.0/` — GStreamer 插件目录（base/good/bad/ugly/libav 全量）
+- `*.dll` — GStreamer + FFmpeg + libplist + OpenSSL + MinGW 运行库（递归收集全部依赖）
+
+> 运行方式：解压后双击 `start.bat`（或先设置 `GST_PLUGIN_PATH` 再手动启动 exe）。
+> 无需安装任何运行库。GStreamer 插件由 `gstreamer-1.0/` 目录提供，包含
+> `avdec_h264`（软解）、`d3d11videosink`（渲染）、`wasapisink`（声音）等关键插件。
 
 ---
 
