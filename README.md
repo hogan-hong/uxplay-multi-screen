@@ -261,6 +261,24 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 
 ---
 
+## GitHub Actions 在线编译
+
+本仓库已配置 `.github/workflows/build.yml`，每次 push 到 `master`/`main` 自动编译并产出 Windows 产物：
+
+- 环境：`windows-latest` + MSYS2 UCRT64 + MinGW-w64 gcc
+- 产出 3 个 exe：`uxplay.exe`（后端）、`uxplay-router.exe`（路由器）、`uxplay-panel.exe`（面板）
+- 下载：GitHub 仓库 → Actions → 最新一次成功 run → 底部 Artifacts → `uxplay-windows` zip
+
+编译要点（踩坑记录）：
+
+- `UxPlay` 用 `cmake -G "Unix Makefiles" -DNO_X11_DEPS=ON`，icon.o 需先用 `windres icon.rc -O coff` 预生成（CMake 引用 `${CMAKE_BINARY_DIR}/icon.o` 但无生成规则）
+- router 的显式 W 后缀 API（`LoadIconW`/`LoadCursorW`）配系统资源宏（`IDI_APPLICATION`/`IDC_ARROW`/`IDC_HAND`）时必须用 `MAKEINTRESOURCEW()` 显式转宽字符，否则非 UNICODE 环境下类型不匹配
+- mdnsd 版 `libdnssd.a` 缺失公共层函数（`dnssd_init`/`dnssd_set_airplay_features`/`utils_hwaddr_*`），由 `router/dnssd_compat.c` 补齐
+- 链接顺序：`-lws2_32` 必须放在 `-ldnssd` 之后（libdnssd.a 引用 `gethostname`/`ntohs`）
+- router 需要 `-lgdi32`（`BitBlt`/`CreateCompatibleDC` 等 GDI 函数）和 `UxPlay/lib/compat.c`（`wsa_strerror`）
+
+---
+
 ## 发布产物
 
 `UxPlay-Multi-win64.zip` 包含：
