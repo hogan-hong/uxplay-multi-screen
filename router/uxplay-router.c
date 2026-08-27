@@ -3,14 +3,6 @@
  *
  * Usage: uxplay-router.exe [N] [name]   N=instances (default 3, max 8)
  */
-/* 全文件使用显式 W 后缀宽字符 API，必须定义 UNICODE，
- * 否则 MAKEINTRESOURCE/IDI_APPLICATION 等宏展开成 A 版本导致编译失败 */
-#ifndef UNICODE
-#define UNICODE
-#endif
-#ifndef _UNICODE
-#define _UNICODE
-#endif
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -848,7 +840,7 @@ static HWND tray_init(void) {
         GetModuleFileNameW(NULL, exe, MAX_PATH);
         g_nid.hIcon = ExtractAssociatedIconW(GetModuleHandleW(NULL), exe, &(WORD){0});
     }
-    if (!g_nid.hIcon) g_nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+    if (!g_nid.hIcon) g_nid.hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
     EnterCriticalSection(&g_lock);
     wcscpy(g_nid.szTip, g_tray_tip);
     LeaveCriticalSection(&g_lock);
