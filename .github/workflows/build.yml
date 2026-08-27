@@ -58,10 +58,10 @@ jobs:
         run: |
           cd router
           windres icon.rc -O coff -o icon.res
-          gcc -O2 -Wall -o uxplay-router.exe uxplay-router.c ../UxPlay/lib/compat.c \
+          gcc -O2 -Wall -o uxplay-router.exe uxplay-router.c dnssd_compat.c ../UxPlay/lib/compat.c \
             -I../UxPlay/lib -I../UxPlay/lib/mdnsd \
-            -lws2_32 -liphlpapi -lole32 -lshell32 -lcomctl32 -lcomdlg32 -lgdi32 icon.res \
-            -L../UxPlay/build/lib/mdnsd -ldnssd
+            -liphlpapi -lole32 -lshell32 -lcomctl32 -lcomdlg32 -lgdi32 icon.res \
+            -L../UxPlay/build/lib/mdnsd -ldnssd -lws2_32
           gcc -O2 -Wall -o uxplay-panel.exe panel.c -luser32 -lgdi32 icon.res
           ls -la uxplay-router.exe uxplay-panel.exe
 
