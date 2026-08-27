@@ -105,6 +105,15 @@ static int64_t audio_delay_alac = 0;
 static int64_t audio_delay_aac = 0;
 static bool relaunch_video = false;
 static bool reset_loop = false;
+/* Deferred-reset support (rotation window): a connection drop is either a
+   genuine disconnect OR the first phase of a device rotation (old TCP socket
+   closed before the new SETUP/SPS arrive).  Destroying the pipeline
+   immediately on conn_reset makes the video window vanish during rotation.
+   We arm a deferred reset and only fire it when no new video data (rotation
+   confirm) arrives within RESET_DEFER_MS.  See README known-issue #1. */
+#define RESET_DEFER_MS 2500
+static volatile bool g_reset_pending = false;
+static volatile DWORD g_reset_pending_at = 0;
 static unsigned int open_connections= 0;
 static std::string videosink = "autovideosink";
 static std::string videosink_options = "";
@@ -541,13 +550,16 @@ static gboolean feedback_callback(gpointer loop) {
             LOGI("   Interval since last client feedback request exceeds limit of %u seconds", missed_feedback_limit);
             LOGI("   Sometimes the network connection may recover after a longer delay:\n"
                  "   the default limit n = %d seconds, can be changed with the \"-reset n\" option", MISSED_FEEDBACK_LIMIT);
-            if (!nofreeze) {
-                close_window = false; /* leave "frozen" window open if reset_video is false */
+            /* Deferred reset (same as conn_reset): feedback silence during a
+               device rotation must not tear down the video pipeline.  Only a
+               real disconnect (no new video data within the confirm window)
+               should reset. */
+            if (!g_reset_pending) {
+                g_reset_pending = true;
+                g_reset_pending_at = GetTickCount();
+                rotation_log("feedback timeout: deferred reset armed (window %.2fs)", RESET_DEFER_MS / 1000.0);
             }
-            reset_httpd = true;
-            relaunch_video = true;
-            full_video_reset = true;
-            g_main_loop_quit((GMainLoop *) loop);
+            missed_feedback = 0;
             return TRUE;
         } else if (missed_feedback > 2) {
             LOGE("%3u seconds since last client feedback request (expected every two seconds); client may be offline", missed_feedback);
@@ -560,6 +572,19 @@ static gboolean feedback_callback(gpointer loop) {
 }
 
 static gboolean reset_callback(gpointer loop) {
+    /* Fire a deferred reset only after the rotation-confirm window elapsed
+       with no new video data (i.e. genuine disconnect, not a rotation). */
+    if (g_reset_pending &&
+        (DWORD)(GetTickCount() - g_reset_pending_at) >= RESET_DEFER_MS) {
+        g_reset_pending = false;
+        rotation_log("deferred reset FIRED (%.2fs without rotation confirm): relaunch_video",
+                     RESET_DEFER_MS / 1000.0);
+        if (!nofreeze) {
+            close_window = false; /* leave "frozen" window open if reset_video is false */
+        }
+        reset_httpd = true;
+        relaunch_video = true;
+    }
     if (reset_loop) {
         g_main_loop_quit((GMainLoop *) loop);
     }
@@ -679,6 +704,7 @@ static void main_loop()  {
     reset_loop = false;
     reset_httpd = false;
     preserve_connections = false;
+    g_reset_pending = false;
     n_video_renderers = 0;
     n_audio_renderers = 0;
     if (use_video) {
@@ -2281,12 +2307,18 @@ extern "C" void conn_reset (void *cls, int reason) {
       break;
     }
     
-    if (!nofreeze) {
-        close_window = false;    /* leave "frozen" window open */
+    /* Deferred reset: a connection drop is either a genuine disconnect or the
+       first phase of a device rotation (old TCP socket closed before the new
+       SETUP/SPS arrive).  Destroying the pipeline immediately here makes the
+       video window vanish during rotation.  Arm a deferred reset instead;
+       reset_callback() fires it only if no new video data (rotation confirm)
+       arrives within RESET_DEFER_MS.  See README known-issue #1. */
+    if (!g_reset_pending) {
+        g_reset_pending = true;
+        g_reset_pending_at = GetTickCount();
+        rotation_log("conn_reset deferred (reason=%d): rotation confirm window %.2fs",
+                     reason, RESET_DEFER_MS / 1000.0);
     }
-    reset_httpd = true;
-    relaunch_video = true;
-    reset_loop = true;
 }
 
 /* device name as reported by the AirPlay (RTSP) layer — the real iPhone
@@ -2543,6 +2575,13 @@ static void rotation_log(const char *fmt, ...) {
 extern "C" void video_report_size(void *cls, float *width_source, float *height_source, float *width, float *height) {
     if (use_video) {
         video_renderer_size(width_source, height_source, width, height);
+    }
+    /* New video data arriving while a deferred reset is pending means the
+       connection drop was a device rotation (old socket closed, new stream
+       already flowing) — cancel the reset and keep the window alive. */
+    if (g_reset_pending) {
+        g_reset_pending = false;
+        rotation_log("rotation confirmed (new video size): deferred reset CANCELLED");
     }
     int sw = (int) *width_source, sh = (int) *height_source;
     if (sw > 0 && sh > 0) {
@@ -3391,6 +3430,15 @@ static BOOL CALLBACK vncm_thread_enum(DWORD tid, LPARAM lp) {
 static DWORD WINAPI vncm_watcher(LPVOID p) {
     (void) p;
     for (;;) {
+        /* If the video window was destroyed & recreated (device rotation or
+           pipeline reset), the old subclass hook is gone.  Re-discover the
+           new window and re-hook, otherwise reverse control silently dies
+           after the first rotation. */
+        if (vncm_hwnd && !IsWindow(vncm_hwnd)) {
+            fprintf(stderr, "vnc: video window gone (recreated), re-hooking\n");
+            vncm_hwnd = NULL;
+            vncm_orig_proc = NULL;
+        }
         if (!vncm_orig_proc) {
             vncfind_t ctx = {NULL};
             HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);

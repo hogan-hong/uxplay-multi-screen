@@ -639,6 +639,12 @@ static BOOL CALLBACK enum_win_proc(HWND h, LPARAM lp) {
 static void apply_grid_layout(void)
 {
     int i, cols = 3, rows = 2;
+    /* HWND we last styled/positioned per slot.  The backend's video window is
+       destroyed & recreated on rotation / pipeline reset; a fresh HWND must
+       force re-styling (borderless + position) even when the video rect did
+       not change — otherwise the recreated window keeps its default frame and
+       shows up unpositioned (looks like it "vanished"). */
+    static HWND styled_hwnd[MAXSLOTS];
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
     int w = sw / cols;
@@ -680,6 +686,11 @@ static void apply_grid_layout(void)
         findwin_t ctx = { g_child_pid[i], NULL };
         EnumWindows(enum_win_proc, (LPARAM)&ctx);
         if (!ctx.hwnd) continue;
+        /* recreated window (rotation/pipeline reset) → force re-style+position */
+        if (styled_hwnd[i] != ctx.hwnd) {
+            g_slot[i].styled = 0;
+            styled_hwnd[i] = ctx.hwnd;
+        }
         if (!g_slot[i].styled) {
             LONG_PTR st = GetWindowLongPtrW(ctx.hwnd, GWL_STYLE);
             st &= ~(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
