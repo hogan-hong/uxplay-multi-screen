@@ -196,6 +196,7 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 - [x] JSON API: windowIndex 支持字符串和数字（易语言兼容）
 - [x] 旋转检测: 视频流分辨率变化检测和日志
 - [x] 旋转窗口消失修复: deferred reset 延迟重置（conn_reset/feedback 超时不再立即销毁窗口）+ 窗口重建后 router 重新定位去边框 + VNC 重新 hook
+- [x] backend not reachable 修复: router 自动探测随包 GStreamer 插件目录并设置 GST_PLUGIN_PATH/GST_PLUGIN_SCANNER 传给后端（此前后端找不到插件直接退出导致无法连接）
 
 ### 进行中
 
@@ -290,9 +291,12 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 - `gstreamer-1.0/` — GStreamer 插件目录（base/good/bad/ugly/libav 全量）
 - `*.dll` — GStreamer + FFmpeg + libplist + OpenSSL + MinGW 运行库（递归收集全部依赖）
 
-> 运行方式：解压后双击 `start.bat`（或先设置 `GST_PLUGIN_PATH` 再手动启动 exe）。
+> 运行方式：解压后双击 `start.bat`，或直接双击 `uxplay-router.exe` 均可。
 > 无需安装任何运行库。GStreamer 插件由 `gstreamer-1.0/` 目录提供，包含
 > `avdec_h264`（软解）、`d3d11videosink`（渲染）、`wasapisink`（声音）等关键插件。
+> 路由器启动时会自动探测随包插件目录（兼容 `gstreamer-1.0/` 扁平布局与
+> `lib\gstreamer-1.0` 布局），自动设置 `GST_PLUGIN_PATH` / `GST_PLUGIN_SCANNER`
+> 传给后端，无需手动配置环境变量（修复"backend not reachable / 设备无法连接"问题）。
 
 ---
 

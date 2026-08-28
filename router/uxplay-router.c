@@ -2004,9 +2004,35 @@ int main(int argc, char **argv) {
     GetModuleFileNameA(NULL, exe, MAX_PATH);
     strcpy(exedir, exe); strrchr(exedir, '\\')[1] = 0;
     {
-        char gstpath[MAX_PATH];
-        snprintf(gstpath, MAX_PATH, "%slib\\gstreamer-1.0", exedir);
-        SetEnvironmentVariable("GST_PLUGIN_SYSTEM_PATH", gstpath);
+        /* 定位随包分发的 GStreamer 插件目录: 兼容扁平布局(gstreamer-1.0)
+           与 MSYS2 布局(lib\gstreamer-1.0), 找到哪个用哪个, 避免后端
+           uxplay.exe 因找不到插件而退出(表现为 backend not reachable) */
+        char gstpath[MAX_PATH]; gstpath[0] = 0;
+        const char *cands[] = { "gstreamer-1.0", "lib\\gstreamer-1.0" };
+        int k;
+        for (k = 0; k < (int)(sizeof(cands) / sizeof(cands[0])); k++) {
+            char tmp[MAX_PATH];
+            snprintf(tmp, sizeof(tmp), "%s%s", exedir, cands[k]);
+            DWORD attr = GetFileAttributesA(tmp);
+            if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+                snprintf(gstpath, sizeof(gstpath), "%s", tmp);
+                break;
+            }
+        }
+        if (gstpath[0]) {
+            /* 追加到已有 GST_PLUGIN_PATH(start.bat 或用户环境已设则不覆盖) */
+            char cur[8192]; cur[0] = 0;
+            GetEnvironmentVariableA("GST_PLUGIN_PATH", cur, sizeof(cur));
+            char nb[16384];
+            if (cur[0]) snprintf(nb, sizeof(nb), "%s;%s", gstpath, cur);
+            else snprintf(nb, sizeof(nb), "%s", gstpath);
+            SetEnvironmentVariable("GST_PLUGIN_PATH", nb);
+            /* 插件扫描器同样指向随包目录 */
+            char sc[MAX_PATH];
+            snprintf(sc, sizeof(sc), "%s\\gst-plugin-scanner.exe", gstpath);
+            if (GetFileAttributesA(sc) != INVALID_FILE_ATTRIBUTES)
+                SetEnvironmentVariable("GST_PLUGIN_SCANNER", sc);
+        }
         char pbuf[4096]; pbuf[0] = 0;
         GetEnvironmentVariableA("PATH", pbuf, sizeof(pbuf));
         char nbuf[8192];
