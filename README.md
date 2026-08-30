@@ -197,6 +197,7 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 - [x] 旋转检测: 视频流分辨率变化检测和日志
 - [x] 旋转窗口消失修复: deferred reset 延迟重置（conn_reset/feedback 超时不再立即销毁窗口）+ 窗口重建后 router 重新定位去边框 + VNC 重新 hook
 - [x] backend not reachable 修复: router 自动探测随包 GStreamer 插件目录并设置 GST_PLUGIN_PATH/GST_PLUGIN_SCANNER 传给后端（此前后端找不到插件直接退出导致无法连接）
+- [x] backend not reachable 修复(二): 后端 mirror-data 端口(20012)仅在 RTSP SETUP 时才创建, 设备在 mDNS 发现后立即连 7100 会竞态失败; router 对 mirror 端口 connect 失败时重试等待(25×120ms), 并在 not reachable 日志打印失败端口; 后端 accept/SETUP 诊断日志提升到 LOGGER_ERR 以便确认设备连接是否到达后端
 
 ### 进行中
 
