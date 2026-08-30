@@ -309,8 +309,10 @@ httpd_accept_connection(httpd_t *httpd, int server_fd, int is_ipv6)
     }
 
     local = netutils_get_address(&local_saddr, &local_len, &local_zone_id, &port);   
-    logger_log(httpd->logger, LOGGER_INFO, "Accepted %s client on socket %d, port %u",
+    logger_log(httpd->logger, LOGGER_ERR, "Accepted %s client on socket %d, port %u",
                (is_ipv6 ? "IPv6"  : "IPv4"), fd, port);
+    fprintf(stderr, "[httpd] accept %s client fd=%d localport=%u\n",
+            (is_ipv6 ? "IPv6" : "IPv4"), fd, (unsigned)port);
     remote = netutils_get_address(&remote_saddr, &remote_len, &remote_zone_id, NULL);
 
     // is it correct that ipv6 link-local local and remote zone id should be the same, as asserted below? 

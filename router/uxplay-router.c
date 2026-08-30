@@ -1011,8 +1011,27 @@ static DWORD WINAPI accept_thread(LPVOID p) {
         SOCKET b = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         SOCKADDR_IN dst; dst.sin_family = AF_INET; dst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         dst.sin_port = htons((unsigned short)(BE_BASE() + (idx + 1) * 10 + pa->port));
-        if (connect(b, (SOCKADDR *)&dst, sizeof(dst)) != 0) {
-            fprintf(stderr, "router: backend %d not reachable\n", idx + 1);
+        /* the backend's mirror-data port is only created during RTSP SETUP, so
+           the very first device connection races it; retry briefly instead of
+           failing immediately.  WSAECONNREFUSED (10061) = port not up yet. */
+        int cok = 0;
+        int max_attempt = (pa->port == 2) ? 25 : 1;   /* only mirror waits for SETUP */
+        for (int attempt = 0; attempt < max_attempt; attempt++) {
+            if (connect(b, (SOCKADDR *)&dst, sizeof(dst)) == 0) { cok = 1; break; }
+            int err = WSAGetLastError();
+            if (attempt == 0)
+                fprintf(stderr, "router: backend %d port %u connect fail (err=%d)%s\n",
+                        idx + 1, (unsigned)ntohs(dst.sin_port), err,
+                        pa->port == 2 ? ", retrying for RTSP SETUP..." : "");
+            if (err != WSAECONNREFUSED && err != WSAETIMEDOUT) break;  /* fatal */
+            closesocket(b);
+            b = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (b == INVALID_SOCKET) break;
+            Sleep(120);
+        }
+        if (!cok) {
+            fprintf(stderr, "router: backend %d not reachable (port %u)\n",
+                    idx + 1, (unsigned)ntohs(dst.sin_port));
             closesocket(s); closesocket(b); continue;
         }
         { BOOL nd = TRUE; setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (char *)&nd, sizeof(nd));
