@@ -612,6 +612,19 @@ static gboolean handle_signal(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+#ifdef _WIN32
+/* crash catcher: unhandled exceptions terminate silently (no log), which
+   makes "backend not reachable" debugging blind.  Log the exception code
+   and faulting address to be_<ctrl>.log before letting the process die. */
+static LONG WINAPI uxplay_exception_filter(EXCEPTION_POINTERS *ep) {
+    fprintf(stderr, "*** FATAL: unhandled exception 0x%08lx at %p\n",
+            ep ? ep->ExceptionRecord->ExceptionCode : 0,
+            ep ? ep->ExceptionRecord->ExceptionAddress : NULL);
+    fflush(stderr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
 static BOOL WINAPI CtrlHandler(DWORD signal) {
     switch (signal) {
     case CTRL_C_EVENT:
@@ -2024,6 +2037,7 @@ static int start_dnssd(std::vector<char> hw_addr, std::string name) {
         LOGE("Could not initialize dnssd library!: error %d", dnssd_error);
         return 1;
     }
+    LOGI("[init] dnssd_init done");
     dnssd_set_peer_to_peer(dnssd, (int) peer_to_peer);
 
     /* after dnssd starts, reset the default feature set here 
@@ -2856,6 +2870,7 @@ static int start_raop_server (unsigned short display[5], unsigned short tcp[3], 
     raop_cbs.on_video_acquire_playback_info = on_video_acquire_playback_info;
 
     raop = raop_init(&raop_cbs);
+    LOGI("[init] raop_init done (%p)", (void *)raop);
     if (raop == NULL) {
         LOGE("Error initializing raop!");
         return -1;
@@ -2863,11 +2878,13 @@ static int start_raop_server (unsigned short display[5], unsigned short tcp[3], 
     raop_set_log_callback(raop, log_callback, NULL);
     raop_set_log_level(raop, log_level);
     /* set nohold = 1 to allow  capture by new client */
+    LOGI("[init] calling raop_init2 (key generation + httpd init) ...");
     if (raop_init2(raop, nohold, mac_address.c_str(), keyfile.c_str())){
         LOGE("Error initializing raop (2)!");
         free (raop);
         return -1;
     }
+    LOGI("[init] raop_init2 done");
 
     /* write desired display pixel width, pixel height, refresh_rate, max_fps, overscanned.  */
     /* use 0 for default values 1920,1080,60,30,0; these are sent to the Airplay client      */
@@ -2888,8 +2905,10 @@ static int start_raop_server (unsigned short display[5], unsigned short tcp[3], 
     raop_set_udp_ports(raop, udp);
 
     raop_port = raop_get_port(raop);
+    LOGI("[init] httpd bind tcp ports ...");
     raop_start_httpd(raop, &raop_port);
     raop_set_port(raop, raop_port);
+    LOGI("[init] httpd bound, raop_port=%u", raop_port);
 
     /* use raop_port for airplay_port (instead of tcp[2]) */
     airplay_port = raop_port;
@@ -3628,6 +3647,8 @@ int main (int argc, char *argv[]) {
                 GetCurrentProcessId(), cp ? cp : "-");
         rotation_log("backend starting pid=%d ctrl=%s", GetCurrentProcessId(), cp ? cp : "-");
     }
+    SetUnhandledExceptionFilter(uxplay_exception_filter);
+    fprintf(stderr, "uxplay backend init: exception filter installed\n");
 #endif
 
 #ifdef _WIN32
@@ -3989,12 +4010,16 @@ int main (int argc, char *argv[]) {
     }
 
     if (start_dnssd(server_hw_addr, server_name)) {
+        LOGE("[init] start_dnssd returned error");
         cleanup();
     }
+    LOGI("[init] start_dnssd done");
     if (start_raop_server(display, tcp, udp, debug_log)) {
+        LOGE("[init] start_raop_server returned error");
         stop_dnssd();
         cleanup();
     }
+    LOGI("[init] start_raop_server done");
 
     if (hls_support) {
         raop_set_lang(raop, lang_requested.c_str(), lang_subtitles.c_str(), lang_system.c_str());
