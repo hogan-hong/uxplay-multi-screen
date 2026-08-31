@@ -199,6 +199,7 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 - [x] backend not reachable 修复: router 自动探测随包 GStreamer 插件目录并设置 GST_PLUGIN_PATH/GST_PLUGIN_SCANNER 传给后端（此前后端找不到插件直接退出导致无法连接）
 - [x] backend not reachable 修复(二): 后端 mirror-data 端口(20012)仅在 RTSP SETUP 时才创建, 设备在 mDNS 发现后立即连 7100 会竞态失败; router 对 mirror 端口 connect 失败时重试等待(25×120ms), 并在 not reachable 日志打印失败端口; 后端 accept/SETUP 诊断日志提升到 LOGGER_ERR 以便确认设备连接是否到达后端
 - [x] 窗口设置修复(排查): 窗口发现改为"取后端进程最大的可见顶层窗口"(d3dvideosink 视频窗口, 避免抓到错误的小窗口), 并新增诊断日志(找不到窗口 / 找到的窗口类名与尺寸), 配合 UXPLAY_LOG=1 生成的 router.log 可定位"未找到窗口"还是"找到但样式被还原"
+- [x] 窗口设置修复(二): GStreamer 视频窗口可能是"被拥有的窗口"(有 owner) 甚至是子窗口, 原发现逻辑的 !GetWindow(GW_OWNER) 检查 + 只枚举顶层窗口会漏掉它; 现去掉 owner 限制 + 顺带枚举子窗口, 并在第一次找不到合格窗口时转储后端进程全部窗口(类名/可见性/owner/尺寸)辅助定位
 - [x] 拒连提示: config 模式下设备名不在所选组时, 托盘气泡提示"设备 X 不属于当前组已断开"(不再无声秒断), 日志仍保留 REJECTED + 原始上报名
 - [x] 后端崩溃(0xc000001d 非法指令)修复: CI 编译后端时 uxplay 的 CMake 默认启用 -O3 -march=native, 产物按 GitHub Actions runner 的 CPU 特性优化(AVX2/AVX512 等), 在用户旧 CPU 上执行到不支持的指令即崩溃; CI 加 -DNO_MARCH_NATIVE=ON 改用通用 x86-64 指令(-O2), 任意机器可跑; 同时增强后端异常过滤器: 崩溃时打印所属模块名 + 崩溃地址处指令字节, 便于定位后续异常
 

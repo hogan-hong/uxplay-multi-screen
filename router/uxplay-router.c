@@ -623,25 +623,58 @@ static void panel_start(void) {
     }
 }
 
-typedef struct { DWORD pid; HWND hwnd; int best_area; } findwin_t;
+typedef struct { DWORD pid; HWND hwnd; int best_area; int match_n; int dump; } findwin_t;
+
+/* the video window might be a CHILD of a helper/parent window; EnumWindows
+   only sees top-level windows, so also scan children of pid-matching ones. */
+static BOOL CALLBACK child_enum_proc(HWND h, LPARAM lp) {
+    findwin_t *ctx = (findwin_t *) lp;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != ctx->pid) return TRUE;
+    RECT r;
+    if (IsWindowVisible(h) && GetWindowRect(h, &r)) {
+        int area = (r.right - r.left) * (r.bottom - r.top);
+        if (area > ctx->best_area) { ctx->hwnd = h; ctx->best_area = area; }
+    }
+    return TRUE;
+}
 
 static BOOL CALLBACK enum_win_proc(HWND h, LPARAM lp) {
     findwin_t *ctx = (findwin_t *) lp;
     DWORD pid = 0;
     GetWindowThreadProcessId(h, &pid);
-    if (pid == ctx->pid && IsWindowVisible(h) && !GetWindow(h, GW_OWNER)) {
+    if (pid != ctx->pid) return TRUE;
+    ctx->match_n++;
+    if (ctx->dump) {
+        RECT r;
+        char cls[128] = "?";
+        GetClassNameA(h, cls, sizeof(cls));
+        if (GetWindowRect(h, &r))
+            fprintf(stderr, "router:   pid %lu win %p class='%s' visible=%d owner=%p rect=%dx%d+%d+%d\n",
+                    (unsigned long) pid, h, cls, (int) IsWindowVisible(h),
+                    GetWindow(h, GW_OWNER),
+                    r.right - r.left, r.bottom - r.top, r.left, r.top);
+        else
+            fprintf(stderr, "router:   pid %lu win %p class='%s' visible=%d owner=%p (no rect)\n",
+                    (unsigned long) pid, h, cls, (int) IsWindowVisible(h),
+                    GetWindow(h, GW_OWNER));
+    }
+    /* pick the LARGEST visible top-level window of the backend — the
+       d3dvideosink video window dwarfs any helper/status window.  Owned
+       top-level windows are allowed (GStreamer may own its video window
+       from a hidden message window). */
+    if (IsWindowVisible(h)) {
         RECT r;
         if (GetWindowRect(h, &r)) {
             int area = (r.right - r.left) * (r.bottom - r.top);
-            /* pick the LARGEST visible top-level window of the backend —
-               the d3dvideosink video window dwarfs any helper/status
-               window, so "first visible" can't grab a wrong small one */
             if (area > ctx->best_area) {
                 ctx->hwnd = h;
                 ctx->best_area = area;
             }
         }
     }
+    EnumChildWindows(h, child_enum_proc, lp);
     return TRUE;
 }
 
@@ -693,9 +726,17 @@ static void apply_grid_layout(void)
         g_vrect_set[i] = 1;
         if (!g_child[i]) continue;
         if (WaitForSingleObject(g_child[i], 0) != WAIT_TIMEOUT) continue;
-        findwin_t ctx = { g_child_pid[i], NULL, 0 };
+        static int diag_done[MAXSLOTS];
+        findwin_t ctx = { g_child_pid[i], NULL, 0, 0, !diag_done[i] };
         EnumWindows(enum_win_proc, (LPARAM)&ctx);
         if (!ctx.hwnd) {
+            if (ctx.match_n > 0 && !diag_done[i]) {
+                /* we saw backend windows but none qualified — dump happened
+                   inside enum_win_proc; log the summary once */
+                fprintf(stderr, "router: slot %d: pid %lu has %d top-level window(s), none styled\n",
+                        i + 1, (unsigned long) g_child_pid[i], ctx.match_n);
+                diag_done[i] = 1;
+            }
             if (!nf_logged[i]) {
                 fprintf(stderr, "router: slot %d: no visible window for backend pid %lu yet\n",
                         i + 1, (unsigned long) g_child_pid[i]);
@@ -703,6 +744,7 @@ static void apply_grid_layout(void)
             }
             continue;
         }
+        if (ctx.match_n > 0 && !diag_done[i]) diag_done[i] = 1;  /* dump done */
         nf_logged[i] = 0;
         /* recreated window (rotation/pipeline reset) → force re-style+position */
         if (styled_hwnd[i] != ctx.hwnd) {
