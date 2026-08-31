@@ -617,9 +617,33 @@ static gboolean handle_signal(gpointer data) {
    makes "backend not reachable" debugging blind.  Log the exception code
    and faulting address to be_<ctrl>.log before letting the process die. */
 static LONG WINAPI uxplay_exception_filter(EXCEPTION_POINTERS *ep) {
-    fprintf(stderr, "*** FATAL: unhandled exception 0x%08lx at %p\n",
-            ep ? ep->ExceptionRecord->ExceptionCode : 0,
-            ep ? ep->ExceptionRecord->ExceptionAddress : NULL);
+    void *addr = ep ? ep->ExceptionRecord->ExceptionAddress : NULL;
+    unsigned long code = ep ? ep->ExceptionRecord->ExceptionCode : 0;
+    /* which module owns the faulting address?  (exe or a GStreamer plugin DLL) */
+    const char *modname = "?";
+    char modpath[MAX_PATH] = {0};
+    if (addr) {
+        HMODULE m = NULL;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCWSTR)addr, &m) && m) {
+            DWORD n = GetModuleFileNameA(m, modpath, sizeof(modpath));
+            if (n > 0) {
+                char *slash = strrchr(modpath, '\\');
+                modname = slash ? slash + 1 : modpath;
+            }
+        }
+    }
+    fprintf(stderr, "*** FATAL: unhandled exception 0x%08lx at %p [%s]\n",
+            code, addr, modname);
+    if (addr) {
+        /* 0xc000001d = illegal instruction: usually old-CPU vs AVX/SSE2
+           optimized code.  Dump raw bytes to identify it. */
+        unsigned char *p = (unsigned char *)addr;
+        fprintf(stderr, "    bytes at fault: ");
+        for (int i = 0; i < 16; i++) fprintf(stderr, "%02x ", p[i]);
+        fprintf(stderr, "\n");
+    }
     fflush(stderr);
     return EXCEPTION_EXECUTE_HANDLER;
 }
