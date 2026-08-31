@@ -623,15 +623,24 @@ static void panel_start(void) {
     }
 }
 
-typedef struct { DWORD pid; HWND hwnd; } findwin_t;
+typedef struct { DWORD pid; HWND hwnd; int best_area; } findwin_t;
 
 static BOOL CALLBACK enum_win_proc(HWND h, LPARAM lp) {
     findwin_t *ctx = (findwin_t *) lp;
     DWORD pid = 0;
     GetWindowThreadProcessId(h, &pid);
     if (pid == ctx->pid && IsWindowVisible(h) && !GetWindow(h, GW_OWNER)) {
-        ctx->hwnd = h;
-        return FALSE;
+        RECT r;
+        if (GetWindowRect(h, &r)) {
+            int area = (r.right - r.left) * (r.bottom - r.top);
+            /* pick the LARGEST visible top-level window of the backend —
+               the d3dvideosink video window dwarfs any helper/status
+               window, so "first visible" can't grab a wrong small one */
+            if (area > ctx->best_area) {
+                ctx->hwnd = h;
+                ctx->best_area = area;
+            }
+        }
     }
     return TRUE;
 }
@@ -645,6 +654,7 @@ static void apply_grid_layout(void)
        not change — otherwise the recreated window keeps its default frame and
        shows up unpositioned (looks like it "vanished"). */
     static HWND styled_hwnd[MAXSLOTS];
+    static int nf_logged[MAXSLOTS];
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
     int w = sw / cols;
@@ -683,13 +693,29 @@ static void apply_grid_layout(void)
         g_vrect_set[i] = 1;
         if (!g_child[i]) continue;
         if (WaitForSingleObject(g_child[i], 0) != WAIT_TIMEOUT) continue;
-        findwin_t ctx = { g_child_pid[i], NULL };
+        findwin_t ctx = { g_child_pid[i], NULL, 0 };
         EnumWindows(enum_win_proc, (LPARAM)&ctx);
-        if (!ctx.hwnd) continue;
+        if (!ctx.hwnd) {
+            if (!nf_logged[i]) {
+                fprintf(stderr, "router: slot %d: no visible window for backend pid %lu yet\n",
+                        i + 1, (unsigned long) g_child_pid[i]);
+                nf_logged[i] = 1;
+            }
+            continue;
+        }
+        nf_logged[i] = 0;
         /* recreated window (rotation/pipeline reset) → force re-style+position */
         if (styled_hwnd[i] != ctx.hwnd) {
             g_slot[i].styled = 0;
             styled_hwnd[i] = ctx.hwnd;
+            {
+                wchar_t cls[128];
+                if (GetClassNameW(ctx.hwnd, cls, 128) > 0) {
+                    RECT r; GetWindowRect(ctx.hwnd, &r);
+                    fprintf(stderr, "router: slot %d: video window class='%ls' size=%dx%d\n",
+                            i + 1, cls, r.right - r.left, r.bottom - r.top);
+                }
+            }
         }
         if (!g_slot[i].styled) {
             LONG_PTR st = GetWindowLongPtrW(ctx.hwnd, GWL_STYLE);
@@ -818,6 +844,19 @@ static void tray_set_tip(const wchar_t *tip) {
         wcscpy(g_nid.szTip, g_tray_tip);
         Shell_NotifyIconW(NIM_MODIFY, &g_nid);
     }
+}
+
+/* tray balloon — non-blocking way to tell the operator a device was
+   rejected (config mode: name not in the selected group).  No-op when
+   running with a console (debug mode) where rlog covers it. */
+static void tray_notify(const wchar_t *title, const wchar_t *msg) {
+    if (!g_nid.hWnd) return;                       /* no tray icon */
+    wcsncpy(g_nid.szInfoTitle, title, 63);  g_nid.szInfoTitle[63] = 0;
+    wcsncpy(g_nid.szInfo,     msg,   255);  g_nid.szInfo[255]     = 0;
+    g_nid.uFlags = NIF_INFO;
+    g_nid.dwInfoFlags = NIIF_INFO;
+    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;  /* restore for tip updates */
 }
 
 static HWND tray_init(void) {
@@ -1637,6 +1676,15 @@ static void router_reject_slot(int s) {
       rlog("router:   raw reported name utf8: %s (len %d)\n", nb, (int) wcslen(g_wname[s]));
       rlog("router:   expected titles %d..%d e.g. '%ls'\n", g_cfg_group * 5 + 1,
            g_cfg_group * 5 + 5, g_cfg_title[g_cfg_group * 5]); }
+    /* 托盘气泡提示: 设备不在当前组, 连接被拒绝 (不再是无声秒断) */
+    {
+        wchar_t ttl[64], msg[256];
+        _snwprintf(ttl, 64, L"UxPlay Router - 拒绝连接");
+        _snwprintf(msg, 256,
+                   L"设备 '%ls' 不属于当前组，已断开连接。\n请检查 groups.ini 中该设备的窗口标题是否配置正确。",
+                   g_wname[s]);
+        tray_notify(ttl, msg);
+    }
     if (g_child[s] && WaitForSingleObject(g_child[s], 0) == WAIT_TIMEOUT) {
         TerminateProcess(g_child[s], 0);
         WaitForSingleObject(g_child[s], 2000);
