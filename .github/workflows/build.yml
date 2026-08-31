@@ -46,7 +46,7 @@ jobs:
           cd UxPlay
           mkdir -p build
           windres icon.rc -O coff -o build/icon.o
-          cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DNO_X11_DEPS=ON
+          cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DNO_MARCH_NATIVE=ON -DNO_X11_DEPS=ON
 
       - name: Build UxPlay
         env:
