@@ -7,6 +7,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <tlhelp32.h>
 #include <wctype.h>
 #include <shobjidl.h>
 #include <objbase.h>
@@ -651,10 +652,11 @@ static BOOL CALLBACK enum_win_proc(HWND h, LPARAM lp) {
         char cls[128] = "?";
         GetClassNameA(h, cls, sizeof(cls));
         if (GetWindowRect(h, &r))
-            fprintf(stderr, "router:   pid %lu win %p class='%s' visible=%d owner=%p rect=%dx%d+%d+%d\n",
+            fprintf(stderr, "router:   pid %lu win %p class='%s' visible=%d owner=%p rect=%ldx%ld+%ld+%ld\n",
                     (unsigned long) pid, h, cls, (int) IsWindowVisible(h),
                     GetWindow(h, GW_OWNER),
-                    r.right - r.left, r.bottom - r.top, r.left, r.top);
+                    (long) (r.right - r.left), (long) (r.bottom - r.top),
+                    (long) r.left, (long) r.top);
         else
             fprintf(stderr, "router:   pid %lu win %p class='%s' visible=%d owner=%p (no rect)\n",
                     (unsigned long) pid, h, cls, (int) IsWindowVisible(h),
@@ -754,8 +756,8 @@ static void apply_grid_layout(void)
                 wchar_t cls[128];
                 if (GetClassNameW(ctx.hwnd, cls, 128) > 0) {
                     RECT r; GetWindowRect(ctx.hwnd, &r);
-                    fprintf(stderr, "router: slot %d: video window class='%ls' size=%dx%d\n",
-                            i + 1, cls, r.right - r.left, r.bottom - r.top);
+                    fprintf(stderr, "router: slot %d: video window class='%ls' size=%ldx%ld\n",
+                            i + 1, cls, (long) (r.right - r.left), (long) (r.bottom - r.top));
                 }
             }
         }
@@ -853,6 +855,71 @@ static void router_kill_children(void) {
     }
     if (g_pshm) { UnmapViewOfFile(g_pshm); g_pshm = NULL; }
     if (g_pshm_h) { CloseHandle(g_pshm_h); g_pshm_h = NULL; }
+}
+
+/* ---------------- orphan backend cleanup ---------------- */
+/* 上次运行若以 ^C / 关闭控制台 / 崩溃结束, router_kill_children 没机会执行,
+   后端 uxplay.exe 会残留并继续占用保留端口(ctrl=BE_BASE()+(i+1)*10+6),
+   导致本次新拉起的后端绑定冲突(10048)→ 设备连不上/画面错位。
+   启动时清扫: 只杀"图像名=uxplay.exe 且 正监听我们 ctrl 端口"的进程。 */
+static int is_uxplay_process(DWORD pid) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    PROCESSENTRY32W pe; pe.dwSize = sizeof(pe);
+    int found = 0;
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            if (pe.th32ProcessID == pid) {
+                if (lstrcmpiW(pe.szExeFile, L"uxplay.exe") == 0) found = 1;
+                break;
+            }
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    return found;
+}
+
+static void kill_orphan_backends(void) {
+    DWORD ctrl[MAXSLOTS]; int n = 0;
+    for (int i = 0; i < MAXSLOTS; i++)
+        ctrl[n++] = (DWORD)(BE_BASE() + (i + 1) * 10 + 6);
+    ULONG size = 0;
+    DWORD rc = GetExtendedTcpTable(NULL, &size, FALSE, AF_INET,
+                                   TCP_TABLE_OWNER_PID_ALL, 0);
+    if (rc == NO_ERROR) return;                 /* 无监听 */
+    if (rc != ERROR_INSUFFICIENT_BUFFER || size == 0) return;
+    MIB_TCPTABLE_OWNER_PID *tab = (MIB_TCPTABLE_OWNER_PID *)malloc(size);
+    if (!tab) return;
+    if (GetExtendedTcpTable(tab, &size, FALSE, AF_INET,
+                            TCP_TABLE_OWNER_PID_ALL, 0) != NO_ERROR) {
+        free(tab); return;
+    }
+    for (DWORD i = 0; i < tab->dwNumEntries; i++) {
+        MIB_TCPROW_OWNER_PID *r = &tab->table[i];
+        if (r->dwState != MIB_TCP_STATE_LISTEN) continue;
+        DWORD port = ntohs((u_short)r->dwLocalPort);   /* 网络字节序 */
+        int is_ours = 0;
+        for (int p = 0; p < n; p++) if (port == ctrl[p]) { is_ours = 1; break; }
+        if (!is_ours) continue;
+        if (!is_uxplay_process(r->dwOwningPid)) continue;
+        HANDLE hp = OpenProcess(PROCESS_TERMINATE, FALSE, r->dwOwningPid);
+        if (hp) {
+            TerminateProcess(hp, 0);
+            CloseHandle(hp);
+            printf("router: killed orphan backend pid %lu (held ctrl port %lu)\n",
+                   (unsigned long) r->dwOwningPid, (unsigned long) port);
+        }
+    }
+    free(tab);
+}
+
+/* ^C / Ctrl+Break / 关闭控制台窗口: 先杀后端与面板再退出, 防止残留占端口 */
+static BOOL WINAPI console_ctrl_handler(DWORD type) {
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT || type == CTRL_CLOSE_EVENT) {
+        router_kill_children();
+        return TRUE;
+    }
+    return FALSE;
 }
 
 static LRESULT CALLBACK tray_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
@@ -2004,6 +2071,9 @@ int main(int argc, char **argv) {
         g_dbgf = fopen(lp, "a");
         if (g_dbgf) setvbuf(g_dbgf, NULL, _IONBF, 0);
     }
+    /* ^C / 关闭控制台窗口也要清理后端, 否则残留 uxplay.exe 占端口
+       (此前只有托盘退出/HTTP 退出路径调用 router_kill_children) */
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
     if (g_debug && !GetConsoleWindow()) AllocConsole();
     /* GUI subsystem: no console; logs go to router.log ONLY when UXPLAY_LOG=1 */
     if (!GetConsoleWindow() && getenv("UXPLAY_LOG")) {
@@ -2153,6 +2223,8 @@ int main(int argc, char **argv) {
     for (i = 0; i < MAXSLOTS; i++) { g_cell_of[i] = i; g_gi_of[i] = -1; }
     _snprintf(g_svcbase, sizeof(g_svcbase), "%s", name);
     _snprintf(g_exedir, sizeof(g_exedir), "%s", exedir);
+    /* 清扫上次崩溃/^C 残留的后端, 避免新后端绑定冲突 */
+    kill_orphan_backends();
     for (i = 0; i < g_nslots; i++) spawn_backend(i, exedir, name);
 
     /* advertise the single AirPlay service via UxPlay's mdnsd */

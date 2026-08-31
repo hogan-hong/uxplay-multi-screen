@@ -202,6 +202,7 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 - [x] 窗口设置修复(二): GStreamer 视频窗口可能是"被拥有的窗口"(有 owner) 甚至是子窗口, 原发现逻辑的 !GetWindow(GW_OWNER) 检查 + 只枚举顶层窗口会漏掉它; 现去掉 owner 限制 + 顺带枚举子窗口, 并在第一次找不到合格窗口时转储后端进程全部窗口(类名/可见性/owner/尺寸)辅助定位
 - [x] 拒连提示: config 模式下设备名不在所选组时, 托盘气泡提示"设备 X 不属于当前组已断开"(不再无声秒断), 日志仍保留 REJECTED + 原始上报名
 - [x] 后端崩溃(0xc000001d 非法指令)修复: CI 编译后端时 uxplay 的 CMake 默认启用 -O3 -march=native, 产物按 GitHub Actions runner 的 CPU 特性优化(AVX2/AVX512 等), 在用户旧 CPU 上执行到不支持的指令即崩溃; CI 加 -DNO_MARCH_NATIVE=ON 改用通用 x86-64 指令(-O2), 任意机器可跑; 同时增强后端异常过滤器: 崩溃时打印所属模块名 + 崩溃地址处指令字节, 便于定位后续异常
+- [x] 孤儿后端残留修复: 上次运行若以 ^C / 关闭控制台 / 崩溃结束, router_kill_children 没机会执行, 后端 uxplay.exe 会残留继续占用 ctrl 端口(BE_BASE+(i+1)*10+6), 导致本次新拉起的后端绑定冲突(10048) → 设备连不上/画面错位(同端口上挂着旧进程); 现①注册 SetConsoleCtrlHandler: ^C/Ctrl+Break/关控制台窗口都会先杀后端与面板再退出; ②启动时用 GetExtendedTcpTable 扫描并结束所有"图像名=uxplay.exe 且正监听我们 ctrl 端口"的遗留进程
 
 ### 进行中
 
