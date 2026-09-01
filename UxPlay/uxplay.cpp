@@ -2329,6 +2329,13 @@ extern "C" void conn_feedback (void *cls) {
     missed_feedback = 0;
 }
 
+/* RAOP TEARDOWN asks "is a deferred reset currently armed?"  If yes the drop
+   is treated as the first phase of a device rotation and the pipeline is kept
+   alive (the new SETUP will resume it).  See README known-issue #1. */
+extern "C" bool reset_pending_cb(void *cls) {
+    return g_reset_pending;
+}
+
 extern "C" void conn_reset (void *cls, int reason) {
     if (raop && raop_is_rotation_pending(raop)) {
         rotation_log("conn_reset suppressed (rotation_pending=true, reason=%d)", reason);
@@ -2860,6 +2867,7 @@ static int start_raop_server (unsigned short display[5], unsigned short tcp[3], 
     raop_cbs.conn_init = conn_init;
     raop_cbs.conn_destroy = conn_destroy;
     raop_cbs.conn_reset = conn_reset;
+    raop_cbs.reset_pending = reset_pending_cb;
     raop_cbs.conn_feedback = conn_feedback;
     raop_cbs.audio_process = audio_process;
     raop_cbs.video_process = video_process;
@@ -3656,7 +3664,12 @@ int main (int argc, char *argv[]) {
     {
         const char *dp = getenv("UXPLAY_DEBUG");
         const char *cp = getenv("UXPLAY_CTRL_PORT");
-        if (dp && *dp && *dp != '0' && cp && *cp) {
+        /* Always capture our own stderr/stdout into be_<ctrl>.log whenever the
+           router assigned us a ctrl port (it always does).  Previously gated on
+           UXPLAY_DEBUG, which meant crash FATAL lines (exception filter) were
+           silently lost when the user ran without it — exactly when the router
+           said "backend not reachable".  A few KB per backend is cheap. */
+        if (cp && *cp) {
             char lp[64];
             _snprintf(lp, sizeof(lp), "be_%s.log", cp);
             freopen(lp, "a", stderr);

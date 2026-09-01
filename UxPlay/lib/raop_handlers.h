@@ -1306,13 +1306,19 @@ raop_handler_teardown(raop_conn_t *conn,
             }
         }
     } else if (teardown_110) {
-        if (raop->rotation_pending) {
-            /* Device is rotating: suppress pipeline restart. The pipeline will
-               resume when the new mirror stream arrives via re-SETUP.
-               Do NOT stop the mirror — let it die naturally; conn_reset()
-               is suppressed while rotation_pending is true. */
-            _rotation_log("TEARDOWN 110 SUPPRESSED (rotation_pending=true)");
-            logger_log(raop->logger, LOGGER_INFO, "TEARDOWN type 110 SUPPRESSED (rotation pending)");
+        if (raop->rotation_pending ||
+            (raop->callbacks.reset_pending && raop->callbacks.reset_pending(raop->callbacks.cls))) {
+            /* Device is rotating (or a deferred reset is armed = connection drop
+               within the rotation-confirm window): suppress pipeline restart.
+               The pipeline will resume when the new mirror stream arrives via
+               re-SETUP.  Do NOT stop the mirror — let it die naturally; the
+               deferred reset fires only when no new SETUP confirms the rotation. */
+            _rotation_log("TEARDOWN 110 SUPPRESSED (rotation/reset pending)");
+            { char _m[96]; snprintf(_m, sizeof(_m), "TEARDOWN 110 SUPPRESSED (rotation_pending=%d reset_pending=%d)",
+                                     raop->rotation_pending,
+                                     raop->callbacks.reset_pending ? raop->callbacks.reset_pending(raop->callbacks.cls) : 0);
+              _rotation_log(_m); }
+            logger_log(raop->logger, LOGGER_INFO, "TEARDOWN type 110 SUPPRESSED (rotation/reset pending)");
         } else {
             _rotation_log("TEARDOWN 110 NOT suppressed (rotation_pending=false), calling video_reset");
             logger_log(raop->logger, LOGGER_INFO, "TEARDOWN type 110 triggering video_reset (no rotation)");
@@ -1327,13 +1333,19 @@ raop_handler_teardown(raop_conn_t *conn,
             }
         }
     } else {
-        if (raop->rotation_pending) {
-            /* Device is rotating: general TEARDOWN without type.
-               Do NOT stop or destroy the mirror — let it die naturally when
-               the iPhone disconnects. conn_reset() is suppressed while
-               rotation_pending is true. re-SETUP will create a new mirror. */
-            _rotation_log("TEARDOWN no-type SUPPRESSED (rotation_pending=true)");
-            logger_log(raop->logger, LOGGER_INFO, "TEARDOWN (no type) suppressed, rotation pending");
+        if (raop->rotation_pending ||
+            (raop->callbacks.reset_pending && raop->callbacks.reset_pending(raop->callbacks.cls))) {
+            /* Device is rotating / connection drop within rotation window:
+               general TEARDOWN without type.  Do NOT stop or destroy the
+               mirror — let it die naturally; the deferred reset fires only if
+               no new SETUP confirms a rotation. re-SETUP will create a new
+               mirror. */
+            _rotation_log("TEARDOWN no-type SUPPRESSED (rotation/reset pending)");
+            { char _m[96]; snprintf(_m, sizeof(_m), "TEARDOWN no-type SUPPRESSED (rotation_pending=%d reset_pending=%d)",
+                                     raop->rotation_pending,
+                                     raop->callbacks.reset_pending ? raop->callbacks.reset_pending(raop->callbacks.cls) : 0);
+              _rotation_log(_m); }
+            logger_log(raop->logger, LOGGER_INFO, "TEARDOWN (no type) suppressed, rotation/reset pending");
         } else {
             _rotation_log("TEARDOWN no-type destroying sessions");
             /* Destroy our sessions */

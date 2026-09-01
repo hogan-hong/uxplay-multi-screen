@@ -203,6 +203,9 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 - [x] 拒连提示: config 模式下设备名不在所选组时, 托盘气泡提示"设备 X 不属于当前组已断开"(不再无声秒断), 日志仍保留 REJECTED + 原始上报名
 - [x] 后端崩溃(0xc000001d 非法指令)修复: CI 编译后端时 uxplay 的 CMake 默认启用 -O3 -march=native, 产物按 GitHub Actions runner 的 CPU 特性优化(AVX2/AVX512 等), 在用户旧 CPU 上执行到不支持的指令即崩溃; CI 加 -DNO_MARCH_NATIVE=ON 改用通用 x86-64 指令(-O2), 任意机器可跑; 同时增强后端异常过滤器: 崩溃时打印所属模块名 + 崩溃地址处指令字节, 便于定位后续异常
 - [x] 孤儿后端残留修复: 上次运行若以 ^C / 关闭控制台 / 崩溃结束, router_kill_children 没机会执行, 后端 uxplay.exe 会残留继续占用 ctrl 端口(BE_BASE+(i+1)*10+6), 导致本次新拉起的后端绑定冲突(10048) → 设备连不上/画面错位(同端口上挂着旧进程); 现①注册 SetConsoleCtrlHandler: ^C/Ctrl+Break/关控制台窗口都会先杀后端与面板再退出; ②启动时用 GetExtendedTcpTable 扫描并结束所有"图像名=uxplay.exe 且正监听我们 ctrl 端口"的遗留进程
+- [x] 旋转窗口消失修复(三): 实测确认 TEARDOWN 110 到达时 rotation_pending 还是 false(要等新 SPS 才置位), TEARDOWN 直接走 video_reset 销毁 pipeline/窗口 → 画面永久消失; 新增 RAOP 回调 reset_pending(cls)=g_reset_pending, TEARDOWN 110/无类型 在延迟重置窗口内一律抑制不销毁 pipeline
+- [x] backend 看门狗: router 每 900ms 检查后端进程, uxplay.exe 子进程死亡自动 respawn, 解决"设备路由到死后端 → 10061 → 永远重连不上"; g_spawning[] 防 reject/evict 双重 respawn
+- [x] 后端日志无条件化: be_<ctrl>.log 不再要求 UXPLAY_DEBUG, router 分配 ctrl 端口即写, 崩溃 FATAL 行自动留存
 
 ### 进行中
 
@@ -233,13 +236,22 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 - 主循环 `reset_callback`（每 100ms）负责真正执行：只有确认窗口内**没有新视频数据**到达（真断连）才触发重建
 - `video_report_size()` 收到新数据即**取消**延迟重置——旋转确认信号
 - `feedback_callback` 超时同样走延迟重置，不再直接 `full_video_reset`
-- 原 `rotation_pending` 抑制保留作第一道防线；TEARDOWN 抑制逻辑不变
+- 原 `rotation_pending` 抑制保留作第一道防线
+
+**第三个漏网点（2026-09 实测确认，旋转后窗口仍消失）**: TEARDOWN 110 到达时 `rotation_pending` 仍是 false（它要等新 SPS 才置位），所以 TEARDOWN 直接走 `video_reset(RESET_TYPE_RTP_SHUTDOWN)` → `relaunch_video=true` + `reset_loop=true` → 主循环立即退出 → `video_renderer_destroy()` → 窗口销毁 → httpd 重启期间新 SETUP 丢失 → 画面永久消失。deferred reset 机制被 TEARDOWN 路径完全绕过。
+
+**修复（第三版）**:
+- RAOP 回调新增 `reset_pending(cls)`：返回后端 `g_reset_pending`（延迟重置窗口是否打开）
+- TEARDOWN 110 / 无类型 TEARDOWN 的抑制条件从 `rotation_pending` 扩为 `rotation_pending || reset_pending`——连接断开后的 2.5 秒确认窗口内到达的 TEARDOWN 一律不销毁 pipeline，等新 SETUP 恢复
+- 真断连（无新 SETUP）时 deferred reset 照常 2.5s 后 FIRED 触发重建，行为不变
 
 **配套修复**:
 - router `apply_grid_layout`：记录每 slot 已样式化的窗口 HWND，窗口重建（旋转/reset）后强制重新去边框+定位，避免新窗口以默认样式/位置出现
 - VNC 反向控制：`vncm_watcher` 检测视频窗口被销毁重建后重新 hook，旋转后反向控制不失效
+- **backend 看门狗（`check_backends`）**: router 每 900ms 检查各后端进程句柄，若 uxplay.exe 子进程已退出（旋转/GStreamer teardown 崩溃等）自动重新拉一个，避免"设备被路由到死后端 → ECONNREFUSED → 永远重连不上"；reject/evict 的主动杀进程路径用 `g_spawning[]` 标志防双重 respawn
+- **后端日志无条件化**: be_<ctrl>.log 不再要求 UXPLAY_DEBUG，只要 router 分配了 ctrl 端口就写（崩溃 FATAL 异常行自动留存，便于定位后端死亡原因）
 
-**旋转日志位置**: `%LOCALAPPDATA%\rotation.log`（记录 `conn_reset deferred` / `rotation confirmed ... CANCELLED` / `deferred reset FIRED` 判定过程）
+**旋转日志位置**: `%LOCALAPPDATA%\rotation.log`（记录 `conn_reset deferred` / `rotation confirmed ... CANCELLED` / `deferred reset FIRED` / `TEARDOWN ... SUPPRESSED` 判定过程）
 
 ### 2. Win+Arrow 窗口吸附
 

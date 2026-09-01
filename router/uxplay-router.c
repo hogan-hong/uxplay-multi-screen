@@ -57,6 +57,8 @@ static int g_with_audio = 0;
 static char g_geom[64] = "";
 static int g_fullscreen = 0;
 static CRITICAL_SECTION g_lock;
+static int g_spawning[MAXSLOTS];   /* 1 while reject/evict is deliberately killing
+                                      a backend (watchdog must not double-respawn) */
 
 typedef struct {
     int used;
@@ -268,6 +270,7 @@ static int g_cellxy[MAXSLOTS][2];        /* cell origin per slot */
 static int g_vrect_set[MAXSLOTS];
 static void notify_backend_ip(int idx);
 static void spawn_backend(int i, const char *exedir, const char *name);
+static void check_backends(void);
 
 /* ---------------- group config (optional -config file.ini) ---------------- */
 static int g_cfg_active = 0;          /* config mode on, group chosen */
@@ -1000,6 +1003,7 @@ static DWORD WINAPI window_mgr_thread(LPVOID p) {
     (void) p;
     if (!GetConsoleWindow()) tray_init();
     for (;;) {
+        check_backends();
         apply_grid_layout();
         DWORD t0 = GetTickCount();
         while (GetTickCount() - t0 < 900) {
@@ -1794,6 +1798,7 @@ static void router_reject_slot(int s) {
                    g_wname[s]);
         tray_notify(ttl, msg);
     }
+    g_spawning[s] = 1;
     if (g_child[s] && WaitForSingleObject(g_child[s], 0) == WAIT_TIMEOUT) {
         TerminateProcess(g_child[s], 0);
         WaitForSingleObject(g_child[s], 2000);
@@ -1809,6 +1814,7 @@ static void router_reject_slot(int s) {
     g_vrect_set[s] = 0;
     g_cell_of[s] = s;
     spawn_backend(s, g_exedir, g_svcbase);   /* fresh backend for the next candidate */
+    g_spawning[s] = 0;
 }
 
 /* persistent device->window binding for dynamic (no-config) mode:
@@ -1913,6 +1919,7 @@ static void router_apply_name(int s, const wchar_t *name) {
                 }
                 rlog("router: EVICT stale slot %d (%s) of '%ls' claimed by slot %d (%s)\n",
                           t + 1, g_slot[t].ip, name, s + 1, g_slot[s].ip);
+                g_spawning[t] = 1;
                 TerminateProcess(g_child[t], 0);
                 WaitForSingleObject(g_child[t], 2000);
                 if (g_strip[t]) { panel_clear_slot(t); g_strip[t] = NULL; }
@@ -1920,6 +1927,7 @@ static void router_apply_name(int s, const wchar_t *name) {
                 g_wname[t][0] = 0; g_gi_of[t] = -1; g_dimw[t] = 0; g_dimh[t] = 0;
                 g_vrect_set[t] = 0; g_cell_of[t] = t;
                 spawn_backend(t, g_exedir, g_svcbase);
+                g_spawning[t] = 0;
             }
         }
         g_gi_of[s] = hit;
@@ -2056,6 +2064,33 @@ static void spawn_backend(int i, const char *exedir, const char *name) {
     g_child_pid[i] = pi.dwProcessId;
     printf("router: started backend \"%s\" on ports tcp %d/%d/%d udp %d/%d/%d\n",
            g_be_name[i], base + 2, base, base + 1, base + 5, base + 4, base + 3);
+}
+
+/* backend watchdog: uxplay.exe children can die (crash during rotation /
+   GStreamer teardown, plugin error, ...).  Without a respawn a device routed
+   to a dead backend gets ECONNREFUSED forever ("backend not reachable" +
+   "can't reconnect").  Poll the process handle; respawn any that exited.
+   g_spawning[] guards the reject/evict kill path (they kill + respawn in the
+   mDNS thread; the watchdog must not see the dying handle and respawn twice). */
+static void check_backends(void) {
+    for (int i = 0; i < g_nslots && i < 5; i++) {
+        if (!g_child[i] || g_spawning[i]) continue;
+        if (WaitForSingleObject(g_child[i], 0) != WAIT_TIMEOUT) {
+            DWORD pid = g_child_pid[i];
+            fprintf(stderr, "router: backend %d (pid %lu) DIED, respawning\n",
+                    i + 1, (unsigned long)pid);
+            CloseHandle(g_child[i]);
+            g_child[i] = NULL;
+            g_child_pid[i] = 0;
+            if (g_strip[i]) { panel_clear_slot(i); g_strip[i] = NULL; }
+            EnterCriticalSection(&g_lock);
+            memset(&g_slot[i], 0, sizeof(slot_t));
+            LeaveCriticalSection(&g_lock);
+            g_wname[i][0] = 0; g_gi_of[i] = -1; g_dimw[i] = 0; g_dimh[i] = 0;
+            g_vrect_set[i] = 0; g_cell_of[i] = i;
+            spawn_backend(i, g_exedir, g_svcbase);
+        }
+    }
 }
 
 int main(int argc, char **argv) {

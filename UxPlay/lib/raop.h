@@ -77,6 +77,9 @@ struct raop_callbacks_s {
     void  (*video_resume)(void *cls);
     void  (*conn_feedback) (void *cls);
     void  (*conn_reset) (void *cls, int reason);
+    bool  (*reset_pending) (void *cls);   /* true while a deferred reset is armed
+                                             (rotation-confirm window open): TEARDOWN
+                                             must not tear the pipeline down then */
     void  (*video_reset) (void *cls, reset_type_t reset_type);
   
   
