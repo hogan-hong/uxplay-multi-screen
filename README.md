@@ -245,6 +245,11 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 - TEARDOWN 110 / 无类型 TEARDOWN 的抑制条件从 `rotation_pending` 扩为 `rotation_pending || reset_pending`——连接断开后的 2.5 秒确认窗口内到达的 TEARDOWN 一律不销毁 pipeline，等新 SETUP 恢复
 - 真断连（无新 SETUP）时 deferred reset 照常 2.5s 后 FIRED 触发重建，行为不变
 
+**修复（第四版, 2026-09 实测仍消失后）**:
+- 新增 `reset_extend(cls)` 回调：TEARDOWN 被抑制时**刷新确认窗口**（重置 2.5s 计时）。实测发现旋转后即使 TEARDOWN 被抑制，设备重连的新 SETUP 若超过 2.5s 才到，deferred reset 照样 FIRED 销毁 pipeline（画面仍消失）；刷新后慢速重连不再被杀
+- TEARDOWN 抑制条件再加一道：`conn->raop_rtp_mirror != NULL`（视频流曾/正活跃）。实测发现 RTSP TEARDOWN 经常**先于**旧 TCP 断开（conn_reset 尚未武装 g_reset_pending），此时仅靠 reset_pending 判不出来——有 mirror 即视为旋转前兆，一律抑制
+- 配套 router：`check_panel()` 面板看门狗（uxplay-panel.exe 死亡自动重启 + 清失效 strip 句柄）；strip 句柄 `IsWindow` 校验（失效则重建）——解决"重连后画面出来但 20px 占位窗不出现"
+
 **配套修复**:
 - router `apply_grid_layout`：记录每 slot 已样式化的窗口 HWND，窗口重建（旋转/reset）后强制重新去边框+定位，避免新窗口以默认样式/位置出现
 - VNC 反向控制：`vncm_watcher` 检测视频窗口被销毁重建后重新 hook，旋转后反向控制不失效

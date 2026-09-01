@@ -1306,17 +1306,26 @@ raop_handler_teardown(raop_conn_t *conn,
             }
         }
     } else if (teardown_110) {
-        if (raop->rotation_pending ||
-            (raop->callbacks.reset_pending && raop->callbacks.reset_pending(raop->callbacks.cls))) {
+        /* mirror active means a video stream was (or still is) flowing — the
+           TEARDOWN is most likely the first phase of a device rotation, even
+           if conn_reset hasn't armed the deferred reset yet (the RTSP
+           TEARDOWN often arrives BEFORE the old TCP socket closes).  Suppress
+           the pipeline restart and refresh the confirm window. */
+        bool rp = raop->rotation_pending ||
+                  (raop->callbacks.reset_pending && raop->callbacks.reset_pending(raop->callbacks.cls)) ||
+                  (conn->raop_rtp_mirror != NULL);
+        if (rp) {
             /* Device is rotating (or a deferred reset is armed = connection drop
                within the rotation-confirm window): suppress pipeline restart.
                The pipeline will resume when the new mirror stream arrives via
                re-SETUP.  Do NOT stop the mirror — let it die naturally; the
                deferred reset fires only when no new SETUP confirms the rotation. */
-            _rotation_log("TEARDOWN 110 SUPPRESSED (rotation/reset pending)");
-            { char _m[96]; snprintf(_m, sizeof(_m), "TEARDOWN 110 SUPPRESSED (rotation_pending=%d reset_pending=%d)",
+            if (raop->callbacks.reset_extend) raop->callbacks.reset_extend(raop->callbacks.cls);
+            _rotation_log("TEARDOWN 110 SUPPRESSED (rotation/reset/mirror active)");
+            { char _m[96]; snprintf(_m, sizeof(_m), "TEARDOWN 110 SUPPRESSED (rotation_pending=%d reset_pending=%d mirror=%d)",
                                      raop->rotation_pending,
-                                     raop->callbacks.reset_pending ? raop->callbacks.reset_pending(raop->callbacks.cls) : 0);
+                                     raop->callbacks.reset_pending ? raop->callbacks.reset_pending(raop->callbacks.cls) : 0,
+                                     conn->raop_rtp_mirror != NULL);
               _rotation_log(_m); }
             logger_log(raop->logger, LOGGER_INFO, "TEARDOWN type 110 SUPPRESSED (rotation/reset pending)");
         } else {
@@ -1333,17 +1342,21 @@ raop_handler_teardown(raop_conn_t *conn,
             }
         }
     } else {
-        if (raop->rotation_pending ||
-            (raop->callbacks.reset_pending && raop->callbacks.reset_pending(raop->callbacks.cls))) {
+        bool rp = raop->rotation_pending ||
+                  (raop->callbacks.reset_pending && raop->callbacks.reset_pending(raop->callbacks.cls)) ||
+                  (conn->raop_rtp_mirror != NULL);
+        if (rp) {
             /* Device is rotating / connection drop within rotation window:
                general TEARDOWN without type.  Do NOT stop or destroy the
                mirror — let it die naturally; the deferred reset fires only if
                no new SETUP confirms a rotation. re-SETUP will create a new
                mirror. */
-            _rotation_log("TEARDOWN no-type SUPPRESSED (rotation/reset pending)");
-            { char _m[96]; snprintf(_m, sizeof(_m), "TEARDOWN no-type SUPPRESSED (rotation_pending=%d reset_pending=%d)",
+            if (raop->callbacks.reset_extend) raop->callbacks.reset_extend(raop->callbacks.cls);
+            _rotation_log("TEARDOWN no-type SUPPRESSED (rotation/reset/mirror active)");
+            { char _m[96]; snprintf(_m, sizeof(_m), "TEARDOWN no-type SUPPRESSED (rotation_pending=%d reset_pending=%d mirror=%d)",
                                      raop->rotation_pending,
-                                     raop->callbacks.reset_pending ? raop->callbacks.reset_pending(raop->callbacks.cls) : 0);
+                                     raop->callbacks.reset_pending ? raop->callbacks.reset_pending(raop->callbacks.cls) : 0,
+                                     conn->raop_rtp_mirror != NULL);
               _rotation_log(_m); }
             logger_log(raop->logger, LOGGER_INFO, "TEARDOWN (no type) suppressed, rotation/reset pending");
         } else {

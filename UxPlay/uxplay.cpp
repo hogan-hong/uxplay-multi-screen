@@ -2336,6 +2336,23 @@ extern "C" bool reset_pending_cb(void *cls) {
     return g_reset_pending;
 }
 
+/* TEARDOWN was suppressed (rotation suspected): refresh the confirm window
+   so a slow device reconnect isn't killed by the deferred-reset timer.
+   (Without this, conn_reset arms a 2.5s window, TEARDOWN arrives inside it,
+   but the new SETUP — which can take several seconds after the rotate — fires
+   the deferred reset and the window vanishes again.) */
+extern "C" void reset_extend_cb(void *cls) {
+    if (g_reset_pending) {
+        g_reset_pending_at = GetTickCount();
+        rotation_log("TEARDOWN suppressed: confirm window refreshed (+%.2fs)", RESET_DEFER_MS / 1000.0);
+    } else {
+        g_reset_pending = true;
+        g_reset_pending_at = GetTickCount();
+        rotation_log("TEARDOWN suppressed (mirror active): confirm window armed (%.2fs)",
+                     RESET_DEFER_MS / 1000.0);
+    }
+}
+
 extern "C" void conn_reset (void *cls, int reason) {
     if (raop && raop_is_rotation_pending(raop)) {
         rotation_log("conn_reset suppressed (rotation_pending=true, reason=%d)", reason);
@@ -2868,6 +2885,7 @@ static int start_raop_server (unsigned short display[5], unsigned short tcp[3], 
     raop_cbs.conn_destroy = conn_destroy;
     raop_cbs.conn_reset = conn_reset;
     raop_cbs.reset_pending = reset_pending_cb;
+    raop_cbs.reset_extend  = reset_extend_cb;
     raop_cbs.conn_feedback = conn_feedback;
     raop_cbs.audio_process = audio_process;
     raop_cbs.video_process = video_process;

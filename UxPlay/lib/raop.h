@@ -80,6 +80,10 @@ struct raop_callbacks_s {
     bool  (*reset_pending) (void *cls);   /* true while a deferred reset is armed
                                              (rotation-confirm window open): TEARDOWN
                                              must not tear the pipeline down then */
+    void  (*reset_extend) (void *cls);    /* TEARDOWN was suppressed because a rotation /
+                                             deferred reset is suspected: refresh the
+                                             confirm window so a slow device reconnect
+                                             (new SETUP) is not killed by the timer */
     void  (*video_reset) (void *cls, reset_type_t reset_type);
   
   

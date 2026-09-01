@@ -806,6 +806,12 @@ static void apply_grid_layout(void)
             int gi = (g_cfg_active && g_cfg_group >= 0 && g_gi_of[i] >= 0) ? g_gi_of[i] : -1;
             panel_sync_handles();
             HWND sw = g_strip[i];
+            /* stale hwnd: panel process died (windows die with it but the shm
+               hwnd lingers) or the strip window was destroyed — treat as gone
+               so the slot gets a fresh strip on reconnect */
+            if (sw && !IsWindow(sw)) {
+                sw = NULL; g_strip[i] = NULL; sgi[i] = -1;
+            }
             if (sw && gi != sgi[i]) {
                 panel_clear_slot(i);
                 sw = NULL; g_strip[i] = NULL;
@@ -999,11 +1005,32 @@ static HWND tray_init(void) {
     return w;
 }
 
+/* panel watchdog: uxplay-panel.exe is a separate process; if it dies the
+   strip windows vanish with it but the shm hwnds linger — apply_grid_layout
+   would then never recreate the strips.  Detect the death, clear the stale
+   hwnds and restart the panel so strips get rebuilt. */
+static void check_panel(void) {
+    if (!g_panel_h) return;
+    if (WaitForSingleObject(g_panel_h, 0) != WAIT_TIMEOUT) return;
+    fprintf(stderr, "router: panel process DIED, restarting\n");
+    CloseHandle(g_panel_h);
+    g_panel_h = NULL;
+    if (g_pshm) {
+        for (int i = 0; i < MAXSLOTS_P; i++) {
+            g_strip[i] = NULL;
+            g_pshm->p[i].hwnd = NULL;
+            g_pshm->p[i].alive = 0;
+        }
+    }
+    panel_start();
+}
+
 static DWORD WINAPI window_mgr_thread(LPVOID p) {
     (void) p;
     if (!GetConsoleWindow()) tray_init();
     for (;;) {
         check_backends();
+        check_panel();
         apply_grid_layout();
         DWORD t0 = GetTickCount();
         while (GetTickCount() - t0 < 900) {
