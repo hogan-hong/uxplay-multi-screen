@@ -899,9 +899,25 @@ raop_rtp_mirror_start(raop_rtp_mirror_t *raop_rtp_mirror, unsigned short *mirror
     raop_rtp_mirror->show_client_FPS_data = show_client_FPS_data;
 
     MUTEX_LOCK(raop_rtp_mirror->run_mutex);
-    if (raop_rtp_mirror->running || !raop_rtp_mirror->joined) {
+    if (raop_rtp_mirror->running) {
         MUTEX_UNLOCK(raop_rtp_mirror->run_mutex);
         return;
+    }
+    /* The mirror thread may have exited ON ITS OWN (client TCP closed / rotation):
+       running=false but joined is still 0 — a re-SETUP would then never be able to
+       restart the mirror and the video would stay black after a rotation.  Reap the
+       dead thread and release its listening socket so a fresh mirror can bind. */
+    bool need_join = !raop_rtp_mirror->joined;
+    MUTEX_UNLOCK(raop_rtp_mirror->run_mutex);
+    if (need_join) {
+        THREAD_JOIN(raop_rtp_mirror->thread_mirror);
+        MUTEX_LOCK(raop_rtp_mirror->run_mutex);
+        raop_rtp_mirror->joined = 1;
+        MUTEX_UNLOCK(raop_rtp_mirror->run_mutex);
+    }
+    if (raop_rtp_mirror->mirror_data_sock != -1) {
+        CLOSESOCKET(raop_rtp_mirror->mirror_data_sock);
+        raop_rtp_mirror->mirror_data_sock = -1;
     }
 
     if (raop_rtp_mirror->remote_saddr.ss_family == AF_INET6) {

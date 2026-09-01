@@ -250,6 +250,10 @@ UxPlay 原版只支持单设备投屏。本项目的目标是**一台 PC 同时�
 - TEARDOWN 抑制条件再加一道：`conn->raop_rtp_mirror != NULL`（视频流曾/正活跃）。实测发现 RTSP TEARDOWN 经常**先于**旧 TCP 断开（conn_reset 尚未武装 g_reset_pending），此时仅靠 reset_pending 判不出来——有 mirror 即视为旋转前兆，一律抑制
 - 配套 router：`check_panel()` 面板看门狗（uxplay-panel.exe 死亡自动重启 + 清失效 strip 句柄）；strip 句柄 `IsWindow` 校验（失效则重建）——解决"重连后画面出来但 20px 占位窗不出现"
 
+**修复（第五版, 2026-09 实测后端进程崩溃后）**:
+- `raop_rtp_mirror_start()` 允许"线程已自然退出但未 join"的 mirror 重启：旧 mirror 线程在客户端断开（旋转）时自己退出，`running=false` 但 `joined=0`，原防护 `running || !joined` 直接 return——新 SETUP 永远无法重启 mirror（端口仍被旧 socket 占着），视频黑屏/停滞；现改为：running 才拦截，`!joined` 时先 `pthread_join` 回收死线程 + 关闭旧监听 socket 再重建，旋转后重连的流能正常收
+- **重要**: 实测发现旋转后新窗口能出现（TEARDOWN 抑制生效），但**后端进程自身崩溃**（router 看门狗显示 `backend N (pid X) DIED`）——崩溃现场在 be_20016.log（异常过滤器已无条件记录模块+出错字节），需配合该日志定位；若仍崩则问题在 GStreamer pipeline 重建期间与旧 mirror 线程的竞态
+
 **配套修复**:
 - router `apply_grid_layout`：记录每 slot 已样式化的窗口 HWND，窗口重建（旋转/reset）后强制重新去边框+定位，避免新窗口以默认样式/位置出现
 - VNC 反向控制：`vncm_watcher` 检测视频窗口被销毁重建后重新 hook，旋转后反向控制不失效
